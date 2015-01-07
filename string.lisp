@@ -1,7 +1,13 @@
-(defpackage cl-string
+(defpackage :cl-string
   (:documentation "Contains a collection of useful string manipulation 
                    functions")
   (:use :common-lisp))
+
+(in-package :cl-string)
+
+(defun string-iter (string func)
+  (loop :for chr :across string
+	:do (funcall func chr)))
 
 (defun string-make (&optional arg)
   "Creates a resizable string, This function accepts one optional argument, 
@@ -16,7 +22,8 @@
 			     :adjustable t
 			     :element-type 'character)))
     (cond
-      ((stringp arg) (dovector (char arg) (vector-push-extend char result)))
+      ((stringp arg) (string-iter arg (lambda (char)
+				    (vector-push-extend char result))))
       ((characterp arg) (vector-push-extend arg result)))
     result))
 
@@ -34,7 +41,8 @@
 	 (result (string-make reslength))
 	 (push-char (lambda (chr) (vector-push-extend chr result)))
 	 (append (lambda (to-append)
-		   (dovector (char to-append) (funcall push-char char)))))
+		   (string-iter to-append (lambda (char)
+					    (funcall push-char char))))))
     (if string (funcall append string))
     (loop :for val :in to-append :do
       (funcall append val))
