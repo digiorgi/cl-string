@@ -1,44 +1,102 @@
 (defpackage :cl-string
   (:documentation "Contains a collection of useful string manipulation 
                    functions")
-  (:use :common-lisp))
+  (:use :common-lisp)
+  (:export :string-make
+           :string-append
+           :string-char
+           :string-length
+           :string-to-list
+           :string-from-char-list
+           :string-containsp
+           :string-split-by-position
+           :string-split-by-chars
+           :string-clear!
+           :string-case-sensitive=
+           :string-case-insensitive=
+           :string==
+           :string/==
+           :string-resizablep))
 
 (in-package :cl-string)
 
 (defun string-iter (string func)
   (loop :for chr :across string
-	:do (funcall func chr)))
+     :do (funcall func chr)))
 
-(defun string-make (&optional arg)
-  "Creates a resizable string, This function accepts one optional argument, 
-   it can be a STRING, to create a resizable string of the same size or a
-   NUMBER, to create a resizable string of the specified size"
-  (let* ((length (or (and (numberp arg) arg)
-		     (and (stringp arg) (length arg))
-		     (and (characterp arg) 1)
-		     0))
+(defun string-compare-two (string-one string-two &key (case-sensitive nil))
+  (if case-sensitive
+      (string= string-one string-two)
+      (string-equal string-one string-two)))
+
+(defun string-compare-one-string-against-list (string-to-be-compared-to-others
+                                               compare-function
+                                               others)
+  (loop for one-of-the-others in others
+     for equal = (funcall compare-function
+                          string-to-be-compared-to-others
+                          one-of-the-others)
+     while equal
+     finally (return equal)))
+
+(defun string-case-sensitive= (string-to-be-compared-to-others
+                              &rest others)
+  (string-compare-one-string-against-list
+     string-to-be-compared-to-others
+     (lambda (a b) (string-compare-two a b :case-sensitive t))
+     others))
+
+(defun string== (string-to-be-compared-to-others &rest others)
+  (apply #'string-case-sensitive=  string-to-be-compared-to-others others))
+
+(defun string/== (string-to-be-compared-to-others &rest others)
+  (not (apply #'string== string-to-be-compared-to-others others)))
+
+(defun string-case-insensitive= (string-to-be-compared-to-others
+                                       &rest others)
+  (string-compare-one-string-against-list
+     string-to-be-compared-to-others
+     (lambda (a b) (string-compare-two a b :case-sensitive nil))
+     others))
+
+
+(defun string-make (&key (preallocate-chars 0 supplied-preallocate-chars-p)
+                      (to-string nil supplied-to-string-p))
+  (let* ((to-string (when supplied-to-string-p (format nil "~a" to-string)))
+         (length (cond (supplied-preallocate-chars-p preallocate-chars)
+                       (supplied-to-string-p (length to-string))
+                       (t 0)))
 	 (result (make-array length
 			     :fill-pointer 0
 			     :adjustable t
 			     :element-type 'character)))
-    (cond
-      ((stringp arg) (string-iter arg (lambda (char)
-				    (vector-push-extend char result))))
-      ((characterp arg) (vector-push-extend arg result)))
+    (when supplied-to-string-p 
+      (string-iter to-string (lambda (char) (vector-push-extend char result))))
     result))
+
+(defun string-resizablep (str)
+  (array-has-fill-pointer-p str))
+
+(defun string-check-fill-pointer (str)
+  "Signals an error if the string is has not a fill pointer"
+  (unless (array-has-fill-pointer-p str)
+    (error "The string need a fill pointer. This is done in the array creation.
+            But to make it easy, just use the functino string-make, but be sure
+            to NOT use make-string."))
+  nil)
 
 (defun string-append (string &rest values)
   "Append to an string anything you want. The first argument must be
    an STRING and the &REST arguments can be of any type"
-  (let* ((to-append (loop :for val :in values
-			  :collecting
-			  (or (and (stringp val) val)
-			      (and (characterp val) (string-make val) )
-			      (and val (write-to-string val))
-			      0)))
-	 (reslength (loop :for val :in to-append
-			  :collecting (length val)))
-	 (result (string-make reslength))
+  (let* ((string (cond
+                   ((and (stringp string) (string-resizablep string)) string)
+                   (string (string-make :to-string string))
+                   (t (string-make))))
+         (to-append (loop :for val :in values
+                       :collecting (cond ((stringp val) val)
+                                         (t (string-make :to-string val)))))
+	 (reslength (loop :for val :in to-append :summing (length val)))
+	 (result (string-make :preallocate-chars reslength))
 	 (push-char (lambda (chr) (vector-push-extend chr result)))
 	 (append (lambda (to-append)
 		   (string-iter to-append (lambda (char)
@@ -64,88 +122,36 @@
   "Transform a list of character to a string."
   `(coerce ,list 'string))
 
-(defun string-containsp (text to-test)
-  ""
-  (let* ((chars (typecase to-test
-		  (character (list to-test))
-		  (string (string-to-list to-test))
-		  (list to-test)))
-	 (has-char (lambda (c) (when (member c chars) t))))
-    (do* ((len (string-length text))
-	  (contains nil)
-	  (i 0 (1+ i)))
-	 ((or (>= i len) contains) contains)
-      (setf contains
-	    (funcall has-char (string-char text i))))))
 
-(defun string-split (str &key (pos 0 supplied-pos)
-			   (char nil supplied-char)
-			   (function nil supplied-function)
-			   (remove-char t))
-  "Split an string in a given position with
-   :POS an integer o list of integer that represent a zero index based position
-   where the string will be split. :CHAR the split is done in each occurrence 
-   of the character passed, but :CHAR also can be an STRING. 
-   :FUNCTION the split id done with a function that accepts one string 
-   returns true."
-  (let* ((split-test
-	   (lambda (index string)
-	     (cond
-	       (supplied-pos
-		(or (and (numberp pos) (equalp index pos))
-		    (and (listp pos) (member index pos))))
-	       (supplied-char
-		(typecase char
-		  (character (char= (char string index) char))
-		  (string (string-containsp char
-					    (string-char string index)))))
-	       (supplied-function (funcall function index string)))))
-	 (result (list))
-	 (subresult)
-	 (push-subresult (lambda ()
-			   (when subresult
-			     (setf result (cons subresult result))
-			     (setf subresult nil)
-			     result))))
-    (loop :for char :across str
-	  :for x = 0 :then (1+ x)
-	  :do
-	     (let ((test-result (funcall split-test x str)))
-	       (if (or (not test-result)
-		       (and test-result (not remove-char)))
-		   (setf subresult (string-append subresult char)))
-	       (if test-result
-		 (funcall push-subresult)))
-	  :finally (if subresult (funcall push-subresult)))
-    (nreverse result)))
+(defun string-split-by-function (string-to-be-splited split-test-function)
+  "SPLIT-TEST-FUNCTION takes two arguments, the first is the whole string, and
+   the second is an integral number wich indicates the split position."
+  (let ((result))
+    (flet ((call-test-function-at-index (index)
+             (funcall split-test-function string-to-be-splited index))
+           (add-to-result (x) (when x (setf result (cons x result))))
+           (reverse-result () (setf result (nreverse result))))
+      (loop :for char :across string-to-be-splited
+         :for char-index = 0 then (1+ char-index)
+         :for substr = (string-append substr char)
+         :with result = nil
+         :when (call-test-function-at-index char-index)
+         :do (progn
+               (add-to-result substr)
+               (setf substr nil))
+         :finally (return (add-to-result substr)))
+      (reverse-result))))
 
-(defun string-last-character-split (string chr)
-  "Split the STRING using a character CHR, and return the last result"
-  (car (last (string-split string :char chr))))
+(defun string-split-by-position (string-to-be-splited &rest positions)
+  (funcall #'string-split-by-function string-to-be-splited
+           (lambda (_ index) (declare (ignore _)) (member index positions))))
 
-(defun string-start-withp (str1 str2 &optional (start 0))
-  "Verifies if STR1 has the STR2 in the position START."
-  (let ((len1 (length str1))
-	(len2 (length str2))
-	(comparation t))
-    (if (> len2 len1) nil
-	(do ((i1 start (1+ i1)) (i2 0 (1+ i2)))
-	    ((or (not comparation) (>= i2 len2)) comparation)
-	  (format t "compare: ~a vs ~a~%" (char str1 i1)
-			(char str2 i2))
-	  (setf comparation
-		(equalp (char str1 i1)
-			(char str2 i2)))))))
+(defun string-split-by-chars (string-to-be-splited &rest characters)
+  (funcall #'string-split-by-function string-to-be-splited
+           (lambda (string index) (let ((char (string-char string index)))
+                               (member char characters)))))
 
-(defun string-check-fill-pointer (str)
-  "Signals an error if the string is has not a fill pointer"
-  (unless (array-has-fill-pointer-p str)
-    (error "The string need a fill pointer. This is done in the array creation.
-            But to make it easy, just use the functino string-make, but be sure
-            to NOT use make-string."))
-  nil)
-
-(defun string-nclear (str)
+(defun string-clear! (str)
   "Returns the fill pointer to 0, this means that the string will be empty
    again, without reallocation, and without erasing. And therefore this 
    function requires an string with fill pointer. Returns the modified string.
